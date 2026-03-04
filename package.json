@@ -1,0 +1,21 @@
+{
+  "name": "@arturograu/openclaw-channel-multibot",
+  "version": "1.0.0",
+  "description": "OpenClaw channel plugin that bridges your agents with the multibot mobile app",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "src/index.ts"
+    ],
+    "channel": {
+      "id": "multibot",
+      "label": "Multibot",
+      "selectionLabel": "Multibot App",
+      "docsPath": "/channels/multibot",
+      "order": 50
+    }
+  },
+  "devDependencies": {
+    "typescript": "^5.8.2"
+  }
+}
