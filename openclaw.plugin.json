@@ -1,0 +1,36 @@
+{
+  "id": "openclaw-channel-multibot",
+  "name": "Multibot",
+  "description": "Chat with your OpenClaw agents from the Multibot mobile app",
+  "kind": "channel",
+  "channels": ["multibot"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "relay": {
+        "type": "string",
+        "description": "WebSocket relay URL",
+        "default": "wss://multibot-relay.fly.dev"
+      },
+      "agents": {
+        "type": "array",
+        "description": "Agents to expose to the Multibot app",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "Agent identifier"
+            },
+            "name": {
+              "type": "string",
+              "description": "Display name in the app"
+            }
+          },
+          "required": ["id", "name"]
+        }
+      }
+    }
+  }
+}

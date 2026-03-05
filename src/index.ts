@@ -1,6 +1,5 @@
 import { RelayConnection } from "./relay";
 import type {
-  ChannelMonitor,
   ChannelPlugin,
   InboundContext,
   OpenClawConfig,
@@ -15,13 +14,18 @@ const DEFAULT_RELAY = "wss://multibot-relay.fly.dev";
 export default function register(api: PluginContext): void {
   const cfg = api.config.channels?.multibot;
   const relayUrl = cfg?.relay ?? DEFAULT_RELAY;
-  const agents = cfg?.agents ?? [];
 
-  if (agents.length === 0) {
-    api.logger.warn(
-      "[multibot] No agents configured. Add them to openclaw.json under channels.multibot.agents",
-    );
-  }
+  // Use channel-specific agents, gateway agent list, or default to "main"
+  const gatewayAgents = api.config.agents?.list ?? [];
+  const agents =
+    cfg?.agents ??
+    (gatewayAgents.length > 0
+      ? gatewayAgents.map((a) => ({ id: a.id, name: a.id }))
+      : [{ id: "main", name: "Main" }]);
+
+  api.logger.info(
+    `[multibot] exposing ${agents.length} agent(s): ${agents.map((a) => a.id).join(", ")}`,
+  );
 
   const relay = new RelayConnection(
     relayUrl,
@@ -71,7 +75,8 @@ export default function register(api: PluginContext): void {
 
   api.registerChannel({ plugin: channelPlugin });
 
-  const monitor: ChannelMonitor = {
+  api.registerService({
+    id: CHANNEL_ID,
     async start() {
       await relay.start();
       if (relay.code) {
@@ -81,9 +86,5 @@ export default function register(api: PluginContext): void {
     async stop() {
       await relay.stop();
     },
-  };
-
-  api.registerChannelMonitor({ channelId: CHANNEL_ID, monitor });
-
-  api.onShutdown(() => relay.stop());
+  });
 }

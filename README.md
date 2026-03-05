@@ -5,7 +5,7 @@ OpenClaw channel plugin that connects your agents to the [Multibot](https://gith
 ## Installation
 
 ```bash
-openclaw plugins install github:arturograu/openclaw_channel_multibot
+openclaw plugins install @fluttered/openclaw-channel-multibot
 ```
 
 ## Configuration

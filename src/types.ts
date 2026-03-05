@@ -12,7 +12,16 @@ export interface MultibotConfig {
   agents: AgentInfo[]; // agents to expose to the app
 }
 
+export interface GatewayAgent {
+  id: string;
+  default?: boolean;
+  workspace?: string;
+}
+
 export interface OpenClawConfig {
+  agents?: {
+    list?: GatewayAgent[];
+  };
   channels?: {
     multibot?: MultibotConfig;
   };
@@ -78,7 +87,8 @@ export interface ChannelPlugin {
   };
 }
 
-export interface ChannelMonitor {
+export interface Service {
+  id: string;
   start(): Promise<void>;
   stop(): Promise<void>;
 }
@@ -94,11 +104,7 @@ export interface PluginContext {
   config: OpenClawConfig;
   logger: PluginLogger;
   registerChannel(opts: { plugin: ChannelPlugin }): void;
-  registerChannelMonitor(opts: {
-    channelId: string;
-    monitor: ChannelMonitor;
-  }): void;
-  onShutdown(cb: () => Promise<void> | void): void;
+  registerService(service: Service): void;
 }
 
 // ── Relay protocol ────────────────────────────────────────────────────────────
