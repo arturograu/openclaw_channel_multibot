@@ -33,6 +33,10 @@ export class RelayConnection {
     this.ws = null;
   }
 
+  sendChunk(agentId: string, sessionId: string, content: string): void {
+    this.send({ type: "chunk", agentId, sessionId, content });
+  }
+
   sendResponse(agentId: string, sessionId: string, content: string): void {
     this.send({ type: "response", agentId, sessionId, content });
   }

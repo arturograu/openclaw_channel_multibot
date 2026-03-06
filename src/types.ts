@@ -100,9 +100,70 @@ export interface PluginLogger {
   debug(msg: string): void;
 }
 
+// ── PluginRuntime (from openclaw/plugin-sdk) ─────────────────────────────────
+
+export interface ReplyPayload {
+  text?: string;
+  [key: string]: unknown;
+}
+
+export interface DispatcherOptions {
+  deliver: (payload: ReplyPayload) => Promise<void>;
+  onError?: (err: unknown) => void;
+}
+
+export interface ResolvedRoute {
+  agentId: string;
+  sessionKey: string;
+}
+
+export interface PluginRuntime {
+  config: {
+    loadConfig(): OpenClawConfig;
+  };
+  channel: {
+    routing: {
+      resolveAgentRoute(params: {
+        cfg: OpenClawConfig;
+        channel: string;
+        accountId: string;
+        peer: { kind: string; id: string };
+      }): ResolvedRoute;
+    };
+    reply: {
+      finalizeInboundContext(ctx: Record<string, unknown>): Record<string, unknown>;
+      resolveEnvelopeFormatOptions(cfg: OpenClawConfig): Record<string, unknown>;
+      formatInboundEnvelope(params: Record<string, unknown>): string;
+      dispatchReplyWithBufferedBlockDispatcher(params: {
+        ctx: Record<string, unknown>;
+        cfg: OpenClawConfig;
+        dispatcherOptions: DispatcherOptions;
+      }): Promise<void>;
+    };
+    session: {
+      resolveStorePath(
+        storeConfig?: unknown,
+        params?: Record<string, unknown>,
+      ): string;
+      readSessionUpdatedAt(params: {
+        storePath: string;
+        sessionKey: string;
+      }): number | undefined;
+      recordInboundSession(params: {
+        storePath: string;
+        sessionKey: string;
+        ctx: Record<string, unknown>;
+        updateLastRoute?: Record<string, string>;
+        onRecordError?: (err: unknown) => void;
+      }): Promise<void>;
+    };
+  };
+}
+
 export interface PluginContext {
   config: OpenClawConfig;
   logger: PluginLogger;
+  runtime: PluginRuntime;
   registerChannel(opts: { plugin: ChannelPlugin }): void;
   registerService(service: Service): void;
 }
@@ -142,4 +203,15 @@ export interface RelayErrorMsg {
   message: string;
 }
 
-export type RelayOutgoing = RelayRegisterMsg | RelayResponseMsg | RelayErrorMsg;
+export interface RelayChunkMsg {
+  type: "chunk";
+  agentId: string;
+  sessionId: string;
+  content: string;
+}
+
+export type RelayOutgoing =
+  | RelayRegisterMsg
+  | RelayResponseMsg
+  | RelayChunkMsg
+  | RelayErrorMsg;
