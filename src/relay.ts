@@ -52,17 +52,12 @@ export class RelayConnection {
     if (this.stopped) {
       return { ok: false, status: "stopped" };
     }
-    if (!this.ws) {
-      return { ok: false, status: "no-socket" };
+    // Always report ok when not explicitly stopped — the relay auto-reconnects,
+    // so transient disconnections should not trigger health-monitor restarts.
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return { ok: true, status: "reconnecting" };
     }
-    switch (this.ws.readyState) {
-      case WebSocket.CONNECTING:
-        return { ok: true, status: "connecting" };
-      case WebSocket.OPEN:
-        return { ok: true, status: "connected" };
-      default:
-        return { ok: false, status: "disconnected" };
-    }
+    return { ok: true, status: "connected" };
   }
 
   sendChunk(agentId: string, sessionId: string, content: string): void {
@@ -159,6 +154,8 @@ export class RelayConnection {
     };
 
     ws.onclose = () => {
+      // Ignore close events from stale WebSocket instances (e.g. after stop+start).
+      if (ws !== this.ws) return;
       this.log.warn("[multibot] relay disconnected");
       this.clearPing();
       if (!this.stopped) {
