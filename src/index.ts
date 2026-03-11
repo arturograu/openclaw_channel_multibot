@@ -92,12 +92,12 @@ export default function register(api: PluginContext): void {
     id: CHANNEL_ID,
     async start() {
       await relay.start();
-      if (relay.code) {
-        api.logger.info(`[multibot] pairing code: ${relay.code}`);
-      }
     },
     async stop() {
       await relay.stop();
+    },
+    healthCheck() {
+      return relay.healthCheck();
     },
   });
 }

@@ -7,6 +7,7 @@ import type {
 } from "./types.ts";
 
 const RECONNECT_DELAY_MS = 5_000;
+const PING_INTERVAL_MS = 30_000;
 
 type InboundHandler = (ctx: InboundContext) => Promise<void>;
 
@@ -14,6 +15,8 @@ export class RelayConnection {
   private ws: WebSocket | null = null;
   private stopped = false;
   private pairingCode: string | null = null;
+  private pingInterval: ReturnType<typeof setInterval> | null = null;
+  private startResolve: (() => void) | null = null;
 
   constructor(
     private readonly relayUrl: string,
@@ -25,12 +28,41 @@ export class RelayConnection {
   async start(): Promise<void> {
     this.stopped = false;
     this.connect();
+
+    // Return a promise that stays pending until stop() is called.
+    // The health-monitor interprets a resolved start() as "service completed."
+    return new Promise<void>((resolve) => {
+      this.startResolve = resolve;
+    });
   }
 
   async stop(): Promise<void> {
     this.stopped = true;
+    this.clearPing();
     this.ws?.close();
     this.ws = null;
+
+    if (this.startResolve) {
+      this.startResolve();
+      this.startResolve = null;
+    }
+  }
+
+  healthCheck(): { ok: boolean; status: string } {
+    if (this.stopped) {
+      return { ok: false, status: "stopped" };
+    }
+    if (!this.ws) {
+      return { ok: false, status: "no-socket" };
+    }
+    switch (this.ws.readyState) {
+      case WebSocket.CONNECTING:
+        return { ok: true, status: "connecting" };
+      case WebSocket.OPEN:
+        return { ok: true, status: "connected" };
+      default:
+        return { ok: false, status: "disconnected" };
+    }
   }
 
   sendChunk(agentId: string, sessionId: string, content: string): void {
@@ -49,6 +81,20 @@ export class RelayConnection {
     return this.pairingCode;
   }
 
+  private startPing(): void {
+    this.clearPing();
+    this.pingInterval = setInterval(() => {
+      this.send({ type: "ping" });
+    }, PING_INTERVAL_MS);
+  }
+
+  private clearPing(): void {
+    if (this.pingInterval) {
+      clearInterval(this.pingInterval);
+      this.pingInterval = null;
+    }
+  }
+
   private connect(): void {
     const url = `${this.relayUrl}/plugin`;
     this.log.info(`[multibot] connecting to relay at ${url}`);
@@ -58,6 +104,7 @@ export class RelayConnection {
 
     ws.onopen = () => {
       this.log.info("[multibot] relay connected");
+      this.startPing();
     };
 
     ws.onmessage = (event) => {
@@ -113,6 +160,7 @@ export class RelayConnection {
 
     ws.onclose = () => {
       this.log.warn("[multibot] relay disconnected");
+      this.clearPing();
       if (!this.stopped) {
         this.log.info(`[multibot] reconnecting in ${RECONNECT_DELAY_MS}ms…`);
         setTimeout(() => this.connect(), RECONNECT_DELAY_MS);

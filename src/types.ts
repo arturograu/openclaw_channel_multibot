@@ -91,6 +91,7 @@ export interface Service {
   id: string;
   start(): Promise<void>;
   stop(): Promise<void>;
+  healthCheck?(): { ok: boolean; status: string };
 }
 
 export interface PluginLogger {
@@ -210,8 +211,13 @@ export interface RelayChunkMsg {
   content: string;
 }
 
+export interface RelayPingMsg {
+  type: "ping";
+}
+
 export type RelayOutgoing =
   | RelayRegisterMsg
   | RelayResponseMsg
   | RelayChunkMsg
-  | RelayErrorMsg;
+  | RelayErrorMsg
+  | RelayPingMsg;
