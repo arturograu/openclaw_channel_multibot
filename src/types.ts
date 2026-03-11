@@ -174,6 +174,7 @@ export interface PluginContext {
 export interface RelayCodeMsg {
   type: "code";
   code: string;
+  token?: string;
 }
 
 export interface RelayInboundMsg {
@@ -215,9 +216,15 @@ export interface RelayPingMsg {
   type: "ping";
 }
 
+export interface RelayReconnectMsg {
+  type: "reconnect";
+  token: string;
+}
+
 export type RelayOutgoing =
   | RelayRegisterMsg
   | RelayResponseMsg
   | RelayChunkMsg
   | RelayErrorMsg
-  | RelayPingMsg;
+  | RelayPingMsg
+  | RelayReconnectMsg;

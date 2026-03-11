@@ -15,6 +15,7 @@ export class RelayConnection {
   private ws: WebSocket | null = null;
   private stopped = false;
   private pairingCode: string | null = null;
+  private reconnectToken: string | null = null;
   private pingInterval: ReturnType<typeof setInterval> | null = null;
   private startResolve: (() => void) | null = null;
 
@@ -100,6 +101,12 @@ export class RelayConnection {
     ws.onopen = () => {
       this.log.info("[multibot] relay connected");
       this.startPing();
+
+      // If we have a stored token from a previous session, attempt to
+      // reclaim the same pairing code so the app can reconnect seamlessly.
+      if (this.reconnectToken) {
+        this.send({ type: "reconnect", token: this.reconnectToken });
+      }
     };
 
     ws.onmessage = (event) => {
@@ -113,6 +120,7 @@ export class RelayConnection {
 
       if (msg.type === "code") {
         this.pairingCode = msg.code;
+        if (msg.token) this.reconnectToken = msg.token;
         this.log.info(`[multibot] pairing code: ${msg.code}`);
         this.send({ type: "register", agents: this.agents });
         return;
