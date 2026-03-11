@@ -1,6 +1,6 @@
 {
   "name": "openclaw-channel-multibot",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "OpenClaw channel plugin that bridges your agents with the multibot mobile app",
   "type": "module",
   "license": "MIT",
