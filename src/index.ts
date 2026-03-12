@@ -1,5 +1,8 @@
+import { readFileSync } from "node:fs";
+import { extname } from "node:path";
 import { RelayConnection } from "./relay";
 import type {
+  AudioAttachment,
   ChannelPlugin,
   InboundContext,
   OpenClawConfig,
@@ -12,6 +15,31 @@ import type {
 const CHANNEL_ID = "multibot";
 const ACCOUNT_ID = "multibot";
 const DEFAULT_RELAY = "wss://multibot-relay.fly.dev";
+const MEDIA_RE = /MEDIA:(\/[^\s]+)/g;
+
+function mimeFromPath(filePath: string): string {
+  const ext = extname(filePath).toLowerCase();
+  const map: Record<string, string> = {
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".ogg": "audio/ogg",
+    ".m4a": "audio/mp4",
+    ".aac": "audio/aac",
+    ".flac": "audio/flac",
+    ".webm": "audio/webm",
+  };
+  return map[ext] ?? "audio/mpeg";
+}
+
+function readMediaAsAudio(filePath: string, logger: { warn(msg: string): void }): AudioAttachment | undefined {
+  try {
+    const buf = readFileSync(filePath);
+    return { data: buf.toString("base64"), mimeType: mimeFromPath(filePath) };
+  } catch (err) {
+    logger.warn(`[multibot] failed to read media file ${filePath}: ${err}`);
+    return undefined;
+  }
+}
 
 export default function register(api: PluginContext): void {
   const cfg = api.config.channels?.multibot;
@@ -80,7 +108,17 @@ export default function register(api: PluginContext): void {
           api.logger.error(`[multibot] malformed chatId: ${ctx.to}`);
           return { ok: false, error: "malformed chatId" };
         }
-        relay.sendResponse(aid, sid, ctx.text);
+        // Check for MEDIA: references in outbound text
+        let text = ctx.text;
+        let audio: AudioAttachment | undefined;
+        const match = MEDIA_RE.exec(text);
+        MEDIA_RE.lastIndex = 0;
+        if (match) {
+          audio = readMediaAsAudio(match[1], api.logger);
+          text = text.replace(MEDIA_RE, "").trim();
+          MEDIA_RE.lastIndex = 0;
+        }
+        relay.sendResponse(aid, sid, text, audio);
         return { ok: true };
       },
     },
@@ -179,16 +217,37 @@ async function dispatchToAgent(
 
   // 4. Dispatch to agent — stream chunks as they arrive
   let fullContent = "";
+  let lastAudio: AudioAttachment | undefined;
 
   await runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
     ctx: ctxPayload,
     cfg: loadedCfg,
     dispatcherOptions: {
       deliver: async (payload) => {
-        if (!payload.text) return;
-        fullContent += payload.text;
-        // Stream each block to the app in real-time
-        relay.sendChunk(agentId, sessionId, payload.text);
+        // Extract audio from mediaUrl if present
+        let audio: AudioAttachment | undefined;
+        if (payload.mediaUrl && typeof payload.mediaUrl === "string") {
+          audio = readMediaAsAudio(payload.mediaUrl, api.logger);
+        }
+
+        let text = payload.text ?? "";
+
+        // Extract MEDIA:/path references from text
+        if (!audio && text) {
+          const match = MEDIA_RE.exec(text);
+          MEDIA_RE.lastIndex = 0; // reset regex state
+          if (match) {
+            audio = readMediaAsAudio(match[1], api.logger);
+            text = text.replace(MEDIA_RE, "").trim();
+            MEDIA_RE.lastIndex = 0;
+          }
+        }
+
+        if (audio) lastAudio = audio;
+        if (!text && !audio) return;
+
+        fullContent += text;
+        relay.sendChunk(agentId, sessionId, text, audio);
       },
       onError: (err) => {
         const message = err instanceof Error ? err.message : String(err);
@@ -199,5 +258,5 @@ async function dispatchToAgent(
   });
 
   // 5. Signal completion
-  relay.sendResponse(agentId, sessionId, fullContent);
+  relay.sendResponse(agentId, sessionId, fullContent, lastAudio);
 }

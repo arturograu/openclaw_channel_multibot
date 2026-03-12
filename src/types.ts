@@ -105,6 +105,8 @@ export interface PluginLogger {
 
 export interface ReplyPayload {
   text?: string;
+  mediaUrl?: string;
+  mediaUrls?: string[];
   [key: string]: unknown;
 }
 
@@ -169,6 +171,13 @@ export interface PluginContext {
   registerService(service: Service): void;
 }
 
+// ── Audio attachment ─────────────────────────────────────────────────────────
+
+export interface AudioAttachment {
+  data: string;    // base64 encoded
+  mimeType: string;
+}
+
 // ── Relay protocol ────────────────────────────────────────────────────────────
 
 export interface RelayCodeMsg {
@@ -196,6 +205,7 @@ export interface RelayResponseMsg {
   agentId: string;
   sessionId: string;
   content: string;
+  audio?: AudioAttachment;
 }
 
 export interface RelayErrorMsg {
@@ -210,6 +220,7 @@ export interface RelayChunkMsg {
   agentId: string;
   sessionId: string;
   content: string;
+  audio?: AudioAttachment;
 }
 
 export interface RelayPingMsg {

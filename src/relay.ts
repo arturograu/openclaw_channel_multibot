@@ -1,5 +1,6 @@
 import type {
   AgentInfo,
+  AudioAttachment,
   InboundContext,
   PluginLogger,
   RelayIncoming,
@@ -61,12 +62,12 @@ export class RelayConnection {
     return { ok: true, status: "connected" };
   }
 
-  sendChunk(agentId: string, sessionId: string, content: string): void {
-    this.send({ type: "chunk", agentId, sessionId, content });
+  sendChunk(agentId: string, sessionId: string, content: string, audio?: AudioAttachment): void {
+    this.send({ type: "chunk", agentId, sessionId, content, ...(audio && { audio }) });
   }
 
-  sendResponse(agentId: string, sessionId: string, content: string): void {
-    this.send({ type: "response", agentId, sessionId, content });
+  sendResponse(agentId: string, sessionId: string, content: string, audio?: AudioAttachment): void {
+    this.send({ type: "response", agentId, sessionId, content, ...(audio && { audio }) });
   }
 
   sendError(agentId: string, sessionId: string, message: string): void {
