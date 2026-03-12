@@ -1,5 +1,5 @@
-import { readFileSync } from "node:fs";
-import { extname } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, extname, join } from "node:path";
 import { RelayConnection } from "./relay";
 import type {
   AudioAttachment,
@@ -41,6 +41,41 @@ function readMediaAsAudio(filePath: string, logger: { warn(msg: string): void })
   }
 }
 
+// ── Token persistence ─────────────────────────────────────────────────────────
+
+const TOKEN_FILE_NAME = "multibot-relay-token.json";
+
+function resolveTokenPath(runtime: PluginRuntime): string {
+  const storePath = runtime.channel.session.resolveStorePath(undefined, {
+    agentId: "multibot",
+  });
+  return join(storePath, TOKEN_FILE_NAME);
+}
+
+function loadToken(path: string, logger: { warn(msg: string): void }): string | undefined {
+  try {
+    if (!existsSync(path)) return undefined;
+    const raw = readFileSync(path, "utf-8");
+    const data = JSON.parse(raw) as { token?: string };
+    return data.token ?? undefined;
+  } catch (err) {
+    logger.warn(`[multibot] failed to load relay token: ${err}`);
+    return undefined;
+  }
+}
+
+function saveToken(path: string, token: string, logger: { warn(msg: string): void }): void {
+  try {
+    const dir = dirname(path);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    writeFileSync(path, JSON.stringify({ token }));
+  } catch (err) {
+    logger.warn(`[multibot] failed to save relay token: ${err}`);
+  }
+}
+
+// ── Plugin registration ──────────────────────────────────────────────────────
+
 export default function register(api: PluginContext): void {
   const cfg = api.config.channels?.multibot;
   const relayUrl = cfg?.relay ?? DEFAULT_RELAY;
@@ -58,12 +93,20 @@ export default function register(api: PluginContext): void {
     `[multibot] exposing ${agents.length} agent(s): ${agents.map((a) => a.id).join(", ")}`,
   );
 
-  const relay = new RelayConnection(
+  const tokenPath = resolveTokenPath(runtime);
+  const savedToken = loadToken(tokenPath, api.logger);
+  if (savedToken) {
+    api.logger.info("[multibot] loaded persisted relay token — will attempt reconnect");
+  }
+
+  const relay = new RelayConnection({
     relayUrl,
     agents,
-    handleInbound,
-    api.logger,
-  );
+    onInbound: handleInbound,
+    log: api.logger,
+    initialToken: savedToken,
+    onTokenChanged: (token) => saveToken(tokenPath, token, api.logger),
+  });
 
   async function handleInbound(ctx: InboundContext): Promise<void> {
     api.logger.debug(

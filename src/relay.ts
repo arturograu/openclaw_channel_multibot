@@ -12,6 +12,17 @@ const PING_INTERVAL_MS = 30_000;
 
 type InboundHandler = (ctx: InboundContext) => Promise<void>;
 
+export interface RelayConnectionOptions {
+  relayUrl: string;
+  agents: AgentInfo[];
+  onInbound: InboundHandler;
+  log: PluginLogger;
+  /** Token from a previous session, loaded from disk. */
+  initialToken?: string;
+  /** Called whenever the relay issues a new reconnect token — persist it. */
+  onTokenChanged?: (token: string) => void;
+}
+
 export class RelayConnection {
   private ws: WebSocket | null = null;
   private stopped = false;
@@ -20,12 +31,20 @@ export class RelayConnection {
   private pingInterval: ReturnType<typeof setInterval> | null = null;
   private startResolve: (() => void) | null = null;
 
-  constructor(
-    private readonly relayUrl: string,
-    private readonly agents: AgentInfo[],
-    private readonly onInbound: InboundHandler,
-    private readonly log: PluginLogger,
-  ) {}
+  private readonly relayUrl: string;
+  private readonly agents: AgentInfo[];
+  private readonly onInbound: InboundHandler;
+  private readonly log: PluginLogger;
+  private readonly onTokenChanged?: (token: string) => void;
+
+  constructor(opts: RelayConnectionOptions) {
+    this.relayUrl = opts.relayUrl;
+    this.agents = opts.agents;
+    this.onInbound = opts.onInbound;
+    this.log = opts.log;
+    this.reconnectToken = opts.initialToken ?? null;
+    this.onTokenChanged = opts.onTokenChanged;
+  }
 
   async start(): Promise<void> {
     this.stopped = false;
@@ -121,7 +140,10 @@ export class RelayConnection {
 
       if (msg.type === "code") {
         this.pairingCode = msg.code;
-        if (msg.token) this.reconnectToken = msg.token;
+        if (msg.token) {
+          this.reconnectToken = msg.token;
+          this.onTokenChanged?.(msg.token);
+        }
         this.log.info(`[multibot] pairing code: ${msg.code}`);
         this.send({ type: "register", agents: this.agents });
         return;
