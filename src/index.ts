@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, watch, writeFileSync } from "node:fs";
+import type { FSWatcher } from "node:fs";
 import { dirname, extname, join } from "node:path";
 import { RelayConnection } from "./relay";
 import type {
@@ -44,6 +45,7 @@ function readMediaAsAudio(filePath: string, logger: { warn(msg: string): void })
 // ── Token persistence ─────────────────────────────────────────────────────────
 
 const TOKEN_FILE_NAME = "multibot-relay-token.json";
+const NEW_CODE_SENTINEL = "request-new-code";
 
 function resolveTokenPath(runtime: PluginRuntime): string {
   const storePath = runtime.channel.session.resolveStorePath(undefined, {
@@ -71,6 +73,36 @@ function saveToken(path: string, token: string, logger: { warn(msg: string): voi
     writeFileSync(path, JSON.stringify({ token }));
   } catch (err) {
     logger.warn(`[multibot] failed to save relay token: ${err}`);
+  }
+}
+
+// ── New-code sentinel watcher ─────────────────────────────────────────────────
+
+function watchNewCodeSentinel(
+  storePath: string,
+  relay: RelayConnection,
+  logger: { info(msg: string): void; warn(msg: string): void },
+): FSWatcher | null {
+  const dir = dirname(join(storePath, NEW_CODE_SENTINEL));
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+
+  try {
+    return watch(dir, (_event, filename) => {
+      if (filename !== NEW_CODE_SENTINEL) return;
+      const sentinelPath = join(dir, NEW_CODE_SENTINEL);
+      if (!existsSync(sentinelPath)) return;
+
+      // Remove sentinel immediately to avoid repeated triggers.
+      try { unlinkSync(sentinelPath); } catch { /* already gone */ }
+
+      relay.requestNewCode();
+      logger.info(
+        `[multibot] new-code requested — watch the logs for the fresh pairing code`,
+      );
+    });
+  } catch (err) {
+    logger.warn(`[multibot] could not watch for new-code sentinel: ${err}`);
+    return null;
   }
 }
 
@@ -151,6 +183,9 @@ export default function register(api: PluginContext): void {
           api.logger.error(`[multibot] malformed chatId: ${ctx.to}`);
           return { ok: false, error: "malformed chatId" };
         }
+        api.logger.debug(
+          `[multibot] sendText text=${ctx.text.slice(0, 80)}`,
+        );
         // Check for MEDIA: references in outbound text
         let text = ctx.text;
         let audio: AudioAttachment | undefined;
@@ -169,12 +204,24 @@ export default function register(api: PluginContext): void {
 
   api.registerChannel({ plugin: channelPlugin });
 
+  // Watch for `request-new-code` sentinel file so the user can trigger
+  // a fresh pairing code with: touch <storePath>/request-new-code
+  // (or: openclaw new-code, if the gateway exposes a helper for this)
+  let sentinelWatcher: FSWatcher | null = null;
+  const sentinelDir = dirname(tokenPath);
+
   api.registerService({
     id: CHANNEL_ID,
     async start() {
+      sentinelWatcher = watchNewCodeSentinel(sentinelDir, relay, api.logger);
+      api.logger.info(
+        `[multibot] to request a new pairing code, run: touch ${join(sentinelDir, NEW_CODE_SENTINEL)}`,
+      );
       await relay.start();
     },
     async stop() {
+      sentinelWatcher?.close();
+      sentinelWatcher = null;
       await relay.stop();
     },
     healthCheck() {
@@ -267,18 +314,32 @@ async function dispatchToAgent(
     cfg: loadedCfg,
     dispatcherOptions: {
       deliver: async (payload) => {
-        // Extract audio from mediaUrl if present
+        // Extract audio from mediaUrls (array), mediaUrl (string),
+        // or MEDIA:/path references in the text.
         let audio: AudioAttachment | undefined;
-        if (payload.mediaUrl && typeof payload.mediaUrl === "string") {
+
+        // 1. mediaUrls (array) — used by OpenClaw TTS
+        const urls = payload.mediaUrls as string[] | undefined;
+        if (Array.isArray(urls)) {
+          for (const url of urls) {
+            if (typeof url === "string" && url.length > 0) {
+              audio = readMediaAsAudio(url, api.logger);
+              if (audio) break;
+            }
+          }
+        }
+
+        // 2. mediaUrl (singular string) — fallback
+        if (!audio && payload.mediaUrl && typeof payload.mediaUrl === "string") {
           audio = readMediaAsAudio(payload.mediaUrl, api.logger);
         }
 
         let text = payload.text ?? "";
 
-        // Extract MEDIA:/path references from text
+        // 3. MEDIA:/path references in text — fallback
         if (!audio && text) {
           const match = MEDIA_RE.exec(text);
-          MEDIA_RE.lastIndex = 0; // reset regex state
+          MEDIA_RE.lastIndex = 0;
           if (match) {
             audio = readMediaAsAudio(match[1], api.logger);
             text = text.replace(MEDIA_RE, "").trim();
@@ -286,7 +347,10 @@ async function dispatchToAgent(
           }
         }
 
-        if (audio) lastAudio = audio;
+        if (audio) {
+          api.logger.info(`[multibot] audio extracted: ${audio.mimeType}, ${audio.data.length} chars base64`);
+          lastAudio = audio;
+        }
         if (!text && !audio) return;
 
         fullContent += text;

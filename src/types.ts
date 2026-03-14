@@ -232,10 +232,15 @@ export interface RelayReconnectMsg {
   token: string;
 }
 
+export interface RelayNewCodeMsg {
+  type: "new-code";
+}
+
 export type RelayOutgoing =
   | RelayRegisterMsg
   | RelayResponseMsg
   | RelayChunkMsg
   | RelayErrorMsg
   | RelayPingMsg
-  | RelayReconnectMsg;
+  | RelayReconnectMsg
+  | RelayNewCodeMsg;

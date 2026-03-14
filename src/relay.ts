@@ -97,6 +97,12 @@ export class RelayConnection {
     return this.pairingCode;
   }
 
+  /** Ask the relay to generate a fresh pairing code (invalidates the old one). */
+  requestNewCode(): void {
+    this.log.info("[multibot] requesting new pairing code from relay…");
+    this.send({ type: "new-code" });
+  }
+
   private startPing(): void {
     this.clearPing();
     this.pingInterval = setInterval(() => {
