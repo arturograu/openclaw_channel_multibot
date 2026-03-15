@@ -163,12 +163,30 @@ export interface PluginRuntime {
   };
 }
 
+// ── CLI registration (commander.js) ──────────────────────────────────────────
+
+export interface CliCommand {
+  command(name: string): CliCommand;
+  description(desc: string): CliCommand;
+  option(flags: string, desc?: string): CliCommand;
+  argument(name: string, desc?: string): CliCommand;
+  action(fn: (...args: unknown[]) => void | Promise<void>): CliCommand;
+}
+
+export interface CliProgram {
+  command(name: string): CliCommand;
+}
+
 export interface PluginContext {
   config: OpenClawConfig;
   logger: PluginLogger;
   runtime: PluginRuntime;
   registerChannel(opts: { plugin: ChannelPlugin }): void;
   registerService(service: Service): void;
+  registerCli(
+    setup: (ctx: { program: CliProgram }) => void,
+    opts: { commands: string[] },
+  ): void;
 }
 
 // ── Audio attachment ─────────────────────────────────────────────────────────

@@ -1,5 +1,4 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, extname, join } from "node:path";
 import { RelayConnection } from "./relay";
 import type {
@@ -45,20 +44,6 @@ function readMediaAsAudio(filePath: string, logger: { warn(msg: string): void })
 // ── Token persistence ─────────────────────────────────────────────────────────
 
 const TOKEN_FILE_NAME = "multibot-relay-token.json";
-
-/** Well-known path where the plugin writes connection info for the CLI. */
-export const CLI_CONFIG_PATH = join(homedir(), ".openclaw", "multibot-cli.json");
-
-export interface CliConfig {
-  relayUrl: string;
-  tokenPath: string;
-}
-
-function saveCliConfig(config: CliConfig): void {
-  const dir = dirname(CLI_CONFIG_PATH);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  writeFileSync(CLI_CONFIG_PATH, JSON.stringify(config, null, 2));
-}
 
 function resolveTokenPath(runtime: PluginRuntime): string {
   const storePath = runtime.channel.session.resolveStorePath(undefined, {
@@ -190,8 +175,6 @@ export default function register(api: PluginContext): void {
   api.registerService({
     id: CHANNEL_ID,
     async start() {
-      // Save connection info so the CLI can request new pairing codes.
-      saveCliConfig({ relayUrl, tokenPath });
       await relay.start();
     },
     async stop() {
@@ -201,6 +184,86 @@ export default function register(api: PluginContext): void {
       return relay.healthCheck();
     },
   });
+
+  // ── CLI command: openclaw multibot new-pairing-code ────────────────────
+  api.registerCli(
+    ({ program }) => {
+      const multibot = program.command("multibot").description("Multibot plugin commands");
+
+      multibot
+        .command("new-pairing-code")
+        .description("Generate a fresh pairing code for the Multibot app")
+        .action(async () => {
+          const token = loadToken(tokenPath, {
+            warn: (msg) => console.error(msg),
+          });
+
+          if (!token) {
+            console.error(
+              "No relay token found. Start the gateway first so the plugin can connect to the relay.",
+            );
+            process.exit(1);
+          }
+
+          console.log("Connecting to relay...");
+
+          const ws = new WebSocket(`${relayUrl}/plugin`);
+          let gotCode = false;
+
+          const timeout = setTimeout(() => {
+            console.error("Timed out waiting for response from relay.");
+            ws.close();
+            process.exit(1);
+          }, 15_000);
+
+          ws.onopen = () => {
+            ws.send(JSON.stringify({ type: "reconnect", token }));
+          };
+
+          ws.onmessage = (event) => {
+            const msg = JSON.parse(event.data as string) as Record<string, unknown>;
+
+            if (msg.type === "code") {
+              if (!gotCode) {
+                // First code = reconnect restored the session. Now request a fresh one.
+                gotCode = true;
+                ws.send(JSON.stringify({ type: "new-code" }));
+                return;
+              }
+              // Second code = the new pairing code.
+              clearTimeout(timeout);
+              console.log(`\n  New pairing code: ${msg.code as string}\n`);
+              console.log(
+                "Use this code in the Multibot app to reconnect your agents.",
+              );
+              ws.close();
+            }
+
+            if (msg.type === "error") {
+              clearTimeout(timeout);
+              console.error(`Relay error: ${msg.message as string}`);
+              ws.close();
+              process.exit(1);
+            }
+          };
+
+          ws.onerror = () => {
+            clearTimeout(timeout);
+            console.error("Could not connect to relay.");
+            process.exit(1);
+          };
+
+          // Keep alive until code arrives or timeout.
+          await new Promise<void>((resolve) => {
+            ws.onclose = () => {
+              clearTimeout(timeout);
+              resolve();
+            };
+          });
+        });
+    },
+    { commands: ["multibot"] },
+  );
 }
 
 // ── Agent dispatch ───────────────────────────────────────────────────────────
