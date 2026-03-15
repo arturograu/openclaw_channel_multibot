@@ -12,23 +12,6 @@ const MIME_TYPES: Record<string, string> = {
   ".webm": "audio/webm",
 };
 
-export function mimeTypeFromExtension(filePath: string): string {
-  return MIME_TYPES[extname(filePath).toLowerCase()] ?? "audio/mpeg";
-}
-
-export function readFileAsAudio(
-  filePath: string,
-  logger: { warn(msg: string): void },
-): AudioAttachment | undefined {
-  try {
-    const buf = readFileSync(filePath);
-    return { data: buf.toString("base64"), mimeType: mimeTypeFromExtension(filePath) };
-  } catch (err) {
-    logger.warn(`[multibot] failed to read media file ${filePath}: ${err}`);
-    return undefined;
-  }
-}
-
 export function extractMediaReference(
   text: string,
   logger: { warn(msg: string): void },
@@ -70,4 +53,24 @@ export function extractAudioFromPayload(
   }
 
   return { text, audio };
+}
+
+function mimeTypeFromExtension(filePath: string): string {
+  return MIME_TYPES[extname(filePath).toLowerCase()] ?? "audio/mpeg";
+}
+
+function readFileAsAudio(
+  filePath: string,
+  logger: { warn(msg: string): void },
+): AudioAttachment | undefined {
+  try {
+    const buf = readFileSync(filePath);
+    return {
+      data: buf.toString("base64"),
+      mimeType: mimeTypeFromExtension(filePath),
+    };
+  } catch (err) {
+    logger.warn(`[multibot] failed to read media file ${filePath}: ${err}`);
+    return undefined;
+  }
 }

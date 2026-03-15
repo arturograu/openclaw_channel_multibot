@@ -34,7 +34,7 @@ export function registerCliCommands(
       console.log("Connecting to relay...");
 
       const ws = new WebSocket(`${relayUrl}/plugin`);
-      let receivedFirstCode = false;
+      let sentNewCode = false;
 
       const timeout = setTimeout(() => {
         console.error("Timed out waiting for response from relay.");
@@ -42,19 +42,18 @@ export function registerCliCommands(
         process.exit(1);
       }, 15_000);
 
-      ws.onopen = () => {
-        ws.send(JSON.stringify({ type: "reconnect", token }));
-      };
-
       ws.onmessage = (event) => {
         const msg = JSON.parse(event.data as string) as Record<string, unknown>;
 
         if (msg.type === "code") {
-          if (!receivedFirstCode) {
-            receivedFirstCode = true;
-            ws.send(JSON.stringify({ type: "new-code" }));
+          if (!sentNewCode) {
+            // Initial code from connection — ignore it and request a new one
+            sentNewCode = true;
+            ws.send(JSON.stringify({ type: "new-code", token }));
             return;
           }
+
+          // This is the fresh pairing code
           clearTimeout(timeout);
           console.log(`\n  New pairing code: ${msg.code as string}\n`);
           console.log(
