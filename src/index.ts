@@ -1,100 +1,33 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, extname, join } from "node:path";
-import { RelayConnection } from "./relay";
+import { extractMediaReference } from "./audio.ts";
+import { registerCliCommands } from "./cli.ts";
+import { dispatchToAgent } from "./dispatch.ts";
+import { RelayConnection } from "./relay.ts";
+import { loadPersistedToken, persistToken, resolveTokenPath } from "./token-storage.ts";
 import type {
-  AudioAttachment,
+  AgentInfo,
   ChannelPlugin,
   InboundContext,
   OpenClawConfig,
   OutboundTextContext,
   PluginContext,
-  PluginRuntime,
   SendResult,
-} from "./types";
+} from "./types.ts";
 
 const CHANNEL_ID = "multibot";
 const ACCOUNT_ID = "multibot";
 const DEFAULT_RELAY = "wss://multibot-relay.fly.dev";
-const MEDIA_RE = /MEDIA:(\/[^\s]+)/g;
-
-function mimeFromPath(filePath: string): string {
-  const ext = extname(filePath).toLowerCase();
-  const map: Record<string, string> = {
-    ".mp3": "audio/mpeg",
-    ".wav": "audio/wav",
-    ".ogg": "audio/ogg",
-    ".m4a": "audio/mp4",
-    ".aac": "audio/aac",
-    ".flac": "audio/flac",
-    ".webm": "audio/webm",
-  };
-  return map[ext] ?? "audio/mpeg";
-}
-
-function readMediaAsAudio(filePath: string, logger: { warn(msg: string): void }): AudioAttachment | undefined {
-  try {
-    const buf = readFileSync(filePath);
-    return { data: buf.toString("base64"), mimeType: mimeFromPath(filePath) };
-  } catch (err) {
-    logger.warn(`[multibot] failed to read media file ${filePath}: ${err}`);
-    return undefined;
-  }
-}
-
-// ── Token persistence ─────────────────────────────────────────────────────────
-
-const TOKEN_FILE_NAME = "multibot-relay-token.json";
-
-function resolveTokenPath(runtime: PluginRuntime): string {
-  const storePath = runtime.channel.session.resolveStorePath(undefined, {
-    agentId: "multibot",
-  });
-  return join(storePath, TOKEN_FILE_NAME);
-}
-
-function loadToken(path: string, logger: { warn(msg: string): void }): string | undefined {
-  try {
-    if (!existsSync(path)) return undefined;
-    const raw = readFileSync(path, "utf-8");
-    const data = JSON.parse(raw) as { token?: string };
-    return data.token ?? undefined;
-  } catch (err) {
-    logger.warn(`[multibot] failed to load relay token: ${err}`);
-    return undefined;
-  }
-}
-
-function saveToken(path: string, token: string, logger: { warn(msg: string): void }): void {
-  try {
-    const dir = dirname(path);
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    writeFileSync(path, JSON.stringify({ token }));
-  } catch (err) {
-    logger.warn(`[multibot] failed to save relay token: ${err}`);
-  }
-}
-
-// ── Plugin registration ──────────────────────────────────────────────────────
 
 export default function register(api: PluginContext): void {
-  const cfg = api.config.channels?.multibot;
-  const relayUrl = cfg?.relay ?? DEFAULT_RELAY;
-  const runtime = api.runtime;
+  const channelConfig = api.config.channels?.multibot;
+  const relayUrl = channelConfig?.relay ?? DEFAULT_RELAY;
 
-  // Use channel-specific agents, gateway agent list, or default to "main"
-  const gatewayAgents = api.config.agents?.list ?? [];
-  const agents =
-    cfg?.agents ??
-    (gatewayAgents.length > 0
-      ? gatewayAgents.map((a) => ({ id: a.id, name: a.id }))
-      : [{ id: "main", name: "Main" }]);
-
+  const agents = resolveAgents(api);
   api.logger.info(
     `[multibot] exposing ${agents.length} agent(s): ${agents.map((a) => a.id).join(", ")}`,
   );
 
-  const tokenPath = resolveTokenPath(runtime);
-  const savedToken = loadToken(tokenPath, api.logger);
+  const tokenPath = resolveTokenPath(api.runtime);
+  const savedToken = loadPersistedToken(tokenPath, api.logger);
   if (savedToken) {
     api.logger.info("[multibot] loaded persisted relay token — will attempt reconnect");
   }
@@ -102,29 +35,64 @@ export default function register(api: PluginContext): void {
   const relay = new RelayConnection({
     relayUrl,
     agents,
-    onInbound: handleInbound,
+    onInbound: (ctx) => handleInbound(api, relay, ctx),
     log: api.logger,
     initialToken: savedToken,
-    onTokenChanged: (token) => saveToken(tokenPath, token, api.logger),
+    onTokenChanged: (token) => persistToken(tokenPath, token, api.logger),
   });
 
-  async function handleInbound(ctx: InboundContext): Promise<void> {
-    api.logger.debug(
-      `[multibot] inbound from peer=${ctx.envelope.peerId} chat=${ctx.chatId}: ${ctx.text}`,
-    );
+  api.registerChannel({ plugin: createChannelPlugin(api, relay) });
 
-    const [agentId, sessionId] = ctx.chatId.split("::");
+  api.registerService({
+    id: CHANNEL_ID,
+    start: () => relay.start(),
+    stop: () => relay.stop(),
+    healthCheck: () => relay.healthCheck(),
+  });
 
-    try {
-      await dispatchToAgent(runtime, api, relay, ctx);
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      api.logger.error(`[multibot] dispatch error: ${message}`);
-      relay.sendError(agentId, sessionId, message);
-    }
+  api.registerCli(
+    ({ program }) => registerCliCommands(program, { relayUrl, tokenPath }),
+    { commands: ["multibot"] },
+  );
+}
+
+function resolveAgents(api: PluginContext): AgentInfo[] {
+  const channelAgents = api.config.channels?.multibot?.agents;
+  if (channelAgents) return channelAgents;
+
+  const gatewayAgents = api.config.agents?.list ?? [];
+  if (gatewayAgents.length > 0) {
+    return gatewayAgents.map((a) => ({ id: a.id, name: a.id }));
   }
 
-  const channelPlugin: ChannelPlugin = {
+  return [{ id: "main", name: "Main" }];
+}
+
+async function handleInbound(
+  api: PluginContext,
+  relay: RelayConnection,
+  ctx: InboundContext,
+): Promise<void> {
+  api.logger.debug(
+    `[multibot] inbound from peer=${ctx.envelope.peerId} chat=${ctx.chatId}: ${ctx.text}`,
+  );
+
+  const [agentId, sessionId] = ctx.chatId.split("::");
+
+  try {
+    await dispatchToAgent(api.runtime, api.logger, relay, ctx);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    api.logger.error(`[multibot] dispatch error: ${message}`);
+    relay.sendError(agentId, sessionId, message);
+  }
+}
+
+function createChannelPlugin(
+  api: PluginContext,
+  relay: RelayConnection,
+): ChannelPlugin {
+  return {
     id: CHANNEL_ID,
     meta: {
       id: CHANNEL_ID,
@@ -134,272 +102,28 @@ export default function register(api: PluginContext): void {
       blurb: "Chat with your OpenClaw agents from the Multibot mobile app.",
       order: 50,
     },
-    capabilities: {
-      chatTypes: ["direct"],
-    },
+    capabilities: { chatTypes: ["direct"] },
     config: {
-      listAccountIds: (_cfg: OpenClawConfig) => [ACCOUNT_ID],
-      resolveAccount: (_cfg: OpenClawConfig, accountId?: string) => ({
+      listAccountIds: () => [ACCOUNT_ID],
+      resolveAccount: (_cfg, accountId?) => ({
         accountId: accountId ?? ACCOUNT_ID,
       }),
     },
     outbound: {
       deliveryMode: "direct",
       sendText: async (ctx: OutboundTextContext): Promise<SendResult> => {
-        const [aid, sid] = ctx.to.split("::");
-        if (!aid || !sid) {
+        const [agentId, sessionId] = ctx.to.split("::");
+        if (!agentId || !sessionId) {
           api.logger.error(`[multibot] malformed chatId: ${ctx.to}`);
           return { ok: false, error: "malformed chatId" };
         }
-        api.logger.debug(
-          `[multibot] sendText text=${ctx.text.slice(0, 80)}`,
-        );
-        // Check for MEDIA: references in outbound text
-        let text = ctx.text;
-        let audio: AudioAttachment | undefined;
-        const match = MEDIA_RE.exec(text);
-        MEDIA_RE.lastIndex = 0;
-        if (match) {
-          audio = readMediaAsAudio(match[1], api.logger);
-          text = text.replace(MEDIA_RE, "").trim();
-          MEDIA_RE.lastIndex = 0;
-        }
-        relay.sendResponse(aid, sid, text, audio);
+
+        api.logger.debug(`[multibot] sendText text=${ctx.text.slice(0, 80)}`);
+
+        const { cleanedText, audio } = extractMediaReference(ctx.text, api.logger);
+        relay.sendResponse(agentId, sessionId, cleanedText, audio);
         return { ok: true };
       },
     },
   };
-
-  api.registerChannel({ plugin: channelPlugin });
-
-  api.registerService({
-    id: CHANNEL_ID,
-    async start() {
-      await relay.start();
-    },
-    async stop() {
-      await relay.stop();
-    },
-    healthCheck() {
-      return relay.healthCheck();
-    },
-  });
-
-  // ── CLI command: openclaw multibot new-pairing-code ────────────────────
-  api.registerCli(
-    ({ program }) => {
-      const multibot = program.command("multibot").description("Multibot plugin commands");
-
-      multibot
-        .command("new-pairing-code")
-        .description("Generate a fresh pairing code for the Multibot app")
-        .action(async () => {
-          const token = loadToken(tokenPath, {
-            warn: (msg) => console.error(msg),
-          });
-
-          if (!token) {
-            console.error(
-              "No relay token found. Start the gateway first so the plugin can connect to the relay.",
-            );
-            process.exit(1);
-          }
-
-          console.log("Connecting to relay...");
-
-          const ws = new WebSocket(`${relayUrl}/plugin`);
-          let gotCode = false;
-
-          const timeout = setTimeout(() => {
-            console.error("Timed out waiting for response from relay.");
-            ws.close();
-            process.exit(1);
-          }, 15_000);
-
-          ws.onopen = () => {
-            ws.send(JSON.stringify({ type: "reconnect", token }));
-          };
-
-          ws.onmessage = (event) => {
-            const msg = JSON.parse(event.data as string) as Record<string, unknown>;
-
-            if (msg.type === "code") {
-              if (!gotCode) {
-                // First code = reconnect restored the session. Now request a fresh one.
-                gotCode = true;
-                ws.send(JSON.stringify({ type: "new-code" }));
-                return;
-              }
-              // Second code = the new pairing code.
-              clearTimeout(timeout);
-              console.log(`\n  New pairing code: ${msg.code as string}\n`);
-              console.log(
-                "Use this code in the Multibot app to reconnect your agents.",
-              );
-              ws.close();
-            }
-
-            if (msg.type === "error") {
-              clearTimeout(timeout);
-              console.error(`Relay error: ${msg.message as string}`);
-              ws.close();
-              process.exit(1);
-            }
-          };
-
-          ws.onerror = () => {
-            clearTimeout(timeout);
-            console.error("Could not connect to relay.");
-            process.exit(1);
-          };
-
-          // Keep alive until code arrives or timeout.
-          await new Promise<void>((resolve) => {
-            ws.onclose = () => {
-              clearTimeout(timeout);
-              resolve();
-            };
-          });
-        });
-    },
-    { commands: ["multibot"] },
-  );
-}
-
-// ── Agent dispatch ───────────────────────────────────────────────────────────
-
-async function dispatchToAgent(
-  runtime: PluginRuntime,
-  api: PluginContext,
-  relay: RelayConnection,
-  ctx: InboundContext,
-): Promise<void> {
-  const [agentId, sessionId] = ctx.chatId.split("::");
-  const loadedCfg = runtime.config.loadConfig();
-
-  // 1. Resolve routing
-  const route = runtime.channel.routing.resolveAgentRoute({
-    cfg: loadedCfg,
-    channel: CHANNEL_ID,
-    accountId: ACCOUNT_ID,
-    peer: { kind: "user", id: ctx.senderId },
-  });
-
-  // 2. Build & finalize inbound context
-  const storePath = runtime.channel.session.resolveStorePath(
-    undefined,
-    { agentId: route.agentId },
-  );
-
-  const envelopeOpts = runtime.channel.reply.resolveEnvelopeFormatOptions(loadedCfg);
-  const previousTimestamp = runtime.channel.session.readSessionUpdatedAt({
-    storePath,
-    sessionKey: route.sessionKey,
-  });
-
-  const body = runtime.channel.reply.formatInboundEnvelope({
-    channel: "Multibot",
-    from: ctx.senderName || ctx.senderId,
-    timestamp: ctx.timestamp,
-    body: ctx.text,
-    chatType: "direct",
-    sender: { name: ctx.senderName, id: ctx.senderId },
-    previousTimestamp,
-    envelope: envelopeOpts,
-  });
-
-  const ctxPayload = runtime.channel.reply.finalizeInboundContext({
-    Body: body,
-    RawBody: ctx.text,
-    CommandBody: ctx.text,
-    From: ctx.chatId,
-    To: ctx.chatId,
-    SessionKey: route.sessionKey,
-    AccountId: ACCOUNT_ID,
-    ChannelId: CHANNEL_ID,
-    ChatType: "direct",
-    ConversationLabel: ctx.senderName || ctx.senderId,
-    SenderName: ctx.senderName,
-    SenderId: ctx.senderId,
-    Provider: CHANNEL_ID,
-    Surface: CHANNEL_ID,
-    MessageSid: ctx.messageId,
-    Timestamp: ctx.timestamp,
-    CommandAuthorized: undefined,
-    OriginatingChannel: CHANNEL_ID,
-    OriginatingTo: ctx.chatId,
-  });
-
-  // 3. Record session
-  await runtime.channel.session.recordInboundSession({
-    storePath,
-    sessionKey: route.sessionKey,
-    ctx: ctxPayload,
-    updateLastRoute: { channel: CHANNEL_ID, accountId: ACCOUNT_ID },
-    onRecordError: (err) => {
-      api.logger.error(`[multibot] session record error: ${String(err)}`);
-    },
-  });
-
-  // 4. Dispatch to agent — stream chunks as they arrive
-  let fullContent = "";
-  let lastAudio: AudioAttachment | undefined;
-
-  await runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
-    ctx: ctxPayload,
-    cfg: loadedCfg,
-    dispatcherOptions: {
-      deliver: async (payload) => {
-        // Extract audio from mediaUrls (array), mediaUrl (string),
-        // or MEDIA:/path references in the text.
-        let audio: AudioAttachment | undefined;
-
-        // 1. mediaUrls (array) — used by OpenClaw TTS
-        const urls = payload.mediaUrls as string[] | undefined;
-        if (Array.isArray(urls)) {
-          for (const url of urls) {
-            if (typeof url === "string" && url.length > 0) {
-              audio = readMediaAsAudio(url, api.logger);
-              if (audio) break;
-            }
-          }
-        }
-
-        // 2. mediaUrl (singular string) — fallback
-        if (!audio && payload.mediaUrl && typeof payload.mediaUrl === "string") {
-          audio = readMediaAsAudio(payload.mediaUrl, api.logger);
-        }
-
-        let text = payload.text ?? "";
-
-        // 3. MEDIA:/path references in text — fallback
-        if (!audio && text) {
-          const match = MEDIA_RE.exec(text);
-          MEDIA_RE.lastIndex = 0;
-          if (match) {
-            audio = readMediaAsAudio(match[1], api.logger);
-            text = text.replace(MEDIA_RE, "").trim();
-            MEDIA_RE.lastIndex = 0;
-          }
-        }
-
-        if (audio) {
-          api.logger.info(`[multibot] audio extracted: ${audio.mimeType}, ${audio.data.length} chars base64`);
-          lastAudio = audio;
-        }
-        if (!text && !audio) return;
-
-        fullContent += text;
-        relay.sendChunk(agentId, sessionId, text, audio);
-      },
-      onError: (err) => {
-        const message = err instanceof Error ? err.message : String(err);
-        api.logger.error(`[multibot] reply error: ${message}`);
-        relay.sendError(agentId, sessionId, message);
-      },
-    },
-  });
-
-  // 5. Signal completion
-  relay.sendResponse(agentId, sessionId, fullContent, lastAudio);
 }
