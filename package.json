@@ -31,8 +31,15 @@
       "order": 50
     }
   },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
+  },
   "devDependencies": {
     "@types/node": "^25.4.0",
-    "typescript": "^5.8.2"
+    "@vitest/coverage-v8": "^4.1.0",
+    "typescript": "^5.8.2",
+    "vitest": "^4.1.0"
   }
 }
