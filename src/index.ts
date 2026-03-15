@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, unlinkSync, watch, writeFileSync } from "node:fs";
-import type { FSWatcher } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, extname, join } from "node:path";
 import { RelayConnection } from "./relay";
 import type {
@@ -45,7 +45,20 @@ function readMediaAsAudio(filePath: string, logger: { warn(msg: string): void })
 // ── Token persistence ─────────────────────────────────────────────────────────
 
 const TOKEN_FILE_NAME = "multibot-relay-token.json";
-const NEW_CODE_SENTINEL = "request-new-code";
+
+/** Well-known path where the plugin writes connection info for the CLI. */
+export const CLI_CONFIG_PATH = join(homedir(), ".openclaw", "multibot-cli.json");
+
+export interface CliConfig {
+  relayUrl: string;
+  tokenPath: string;
+}
+
+function saveCliConfig(config: CliConfig): void {
+  const dir = dirname(CLI_CONFIG_PATH);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  writeFileSync(CLI_CONFIG_PATH, JSON.stringify(config, null, 2));
+}
 
 function resolveTokenPath(runtime: PluginRuntime): string {
   const storePath = runtime.channel.session.resolveStorePath(undefined, {
@@ -73,36 +86,6 @@ function saveToken(path: string, token: string, logger: { warn(msg: string): voi
     writeFileSync(path, JSON.stringify({ token }));
   } catch (err) {
     logger.warn(`[multibot] failed to save relay token: ${err}`);
-  }
-}
-
-// ── New-code sentinel watcher ─────────────────────────────────────────────────
-
-function watchNewCodeSentinel(
-  storePath: string,
-  relay: RelayConnection,
-  logger: { info(msg: string): void; warn(msg: string): void },
-): FSWatcher | null {
-  const dir = dirname(join(storePath, NEW_CODE_SENTINEL));
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-
-  try {
-    return watch(dir, (_event, filename) => {
-      if (filename !== NEW_CODE_SENTINEL) return;
-      const sentinelPath = join(dir, NEW_CODE_SENTINEL);
-      if (!existsSync(sentinelPath)) return;
-
-      // Remove sentinel immediately to avoid repeated triggers.
-      try { unlinkSync(sentinelPath); } catch { /* already gone */ }
-
-      relay.requestNewCode();
-      logger.info(
-        `[multibot] new-code requested — watch the logs for the fresh pairing code`,
-      );
-    });
-  } catch (err) {
-    logger.warn(`[multibot] could not watch for new-code sentinel: ${err}`);
-    return null;
   }
 }
 
@@ -204,24 +187,14 @@ export default function register(api: PluginContext): void {
 
   api.registerChannel({ plugin: channelPlugin });
 
-  // Watch for `request-new-code` sentinel file so the user can trigger
-  // a fresh pairing code with: touch <storePath>/request-new-code
-  // (or: openclaw new-code, if the gateway exposes a helper for this)
-  let sentinelWatcher: FSWatcher | null = null;
-  const sentinelDir = dirname(tokenPath);
-
   api.registerService({
     id: CHANNEL_ID,
     async start() {
-      sentinelWatcher = watchNewCodeSentinel(sentinelDir, relay, api.logger);
-      api.logger.info(
-        `[multibot] to request a new pairing code, run: touch ${join(sentinelDir, NEW_CODE_SENTINEL)}`,
-      );
+      // Save connection info so the CLI can request new pairing codes.
+      saveCliConfig({ relayUrl, tokenPath });
       await relay.start();
     },
     async stop() {
-      sentinelWatcher?.close();
-      sentinelWatcher = null;
       await relay.stop();
     },
     healthCheck() {
