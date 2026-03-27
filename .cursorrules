@@ -1,0 +1,147 @@
+# OpenClaw AskRed Channel — Cursor Rules
+
+You are working on **openclaw-askred**, an OpenClaw plugin that bridges OpenClaw AI agents with the AskRed mobile app through a WebSocket relay.
+
+## Related Repositories
+
+This plugin is part of a 3-repo system:
+- **multibot** — Flutter mobile app
+- **multibot_relay** — WebSocket relay server
+- **openclaw-askred** (this repo) — OpenClaw channel plugin
+
+## Tech Stack
+
+- **Runtime:** Node.js (ES modules)
+- **Language:** TypeScript (strict mode, ESNext, bundler resolution)
+- **Test framework:** Vitest 4.1.0
+- **Package manager:** npm
+- **Plugin framework:** OpenClaw plugin SDK (ChannelPlugin interface)
+
+## Commands
+
+```bash
+npm test               # Run all tests (vitest run)
+npm run test:watch     # Watch mode
+npm run test:coverage  # Coverage report
+npx tsc --noEmit       # Type checking
+```
+
+**Publishing:**
+```bash
+npm publish
+```
+
+## Architecture
+
+```
+OpenClaw Runtime ←→ This Plugin ←→ Relay (WSS) ←→ AskRed App
+```
+
+### Directory Structure
+
+```
+src/
+├── index.ts           # Plugin entry point: registration, agent resolution, channel setup
+├── types.ts           # All TypeScript interfaces (relay protocol, OpenClaw SDK stubs)
+├── relay.ts           # RelayConnection class: persistent WSS, reconnect, ping, send
+├── dispatch.ts        # Message dispatch: routes relay messages → OpenClaw agents
+├── audio.ts           # Audio extraction with security (path traversal, symlink, size)
+├── cli.ts             # CLI commands: new-pairing-code, status, list-agents
+├── token-storage.ts   # Persist/load relay tokens to disk (mode 0600)
+├── validation.ts      # Log sanitization (control character stripping)
+
+test/
+├── index.test.ts      # Integration tests (~950 lines)
+├── relay.test.ts      # RelayConnection unit tests (~690 lines)
+├── helpers.ts         # Mock implementations (WebSocket, Runtime, Logger, CLI)
+```
+
+### Key Components
+
+**RelayConnection (relay.ts):**
+- Persistent WebSocket to relay server
+- Reconnection with exponential backoff (5s → 5min, resets on success)
+- Ping every 30s to keep connection alive
+- Concurrency limiting: max 10 concurrent dispatches
+- Token persistence via callback
+- Cancel support for in-flight dispatches
+
+**Dispatch (dispatch.ts):**
+- Routes incoming relay messages to OpenClaw agents via runtime API
+- Session tracking with cancellation flags (`activeSessions` map)
+- Streaming: sends chunks during dispatch, final response after
+- Audio extraction from payload (mediaUrl, MEDIA: references)
+- 5 MB response size limit
+
+**Audio (audio.ts):**
+- Supported formats: MP3, WAV, OGG, M4A, AAC, FLAC, WebM
+- Security: path traversal prevention (`..`), symlink detection (`O_NOFOLLOW`), extension whitelist
+- Max file size: 3.5 MB (stays under 5 MB after base64 + JSON overhead)
+
+**CLI (cli.ts):**
+- `openclaw askred new-pairing-code` — Request fresh pairing code
+- `openclaw askred status` — Show connection status and current code
+- `openclaw askred list-agents` — List configured agents
+
+### Plugin Registration
+
+```typescript
+export default function register(api: PluginContext) {
+  // 1. Resolve agents from config (channel config → gateway agents → default)
+  // 2. Load saved relay token
+  // 3. Create RelayConnection
+  // 4. Register channel plugin (sendText handler)
+  // 5. Register service (start/stop/healthCheck)
+  // 6. Register CLI commands
+}
+```
+
+### Message Flow (Inbound)
+
+1. Relay sends `{type: "message", agentId, sessionId, content}` to plugin
+2. Plugin validates message fields (size, delimiter, required fields)
+3. Plugin builds `InboundContext` with chatId = `${agentId}::${sessionId}`
+4. Plugin calls `dispatchToAgent()` → OpenClaw runtime routes to agent
+5. Runtime sends response chunks → plugin streams via relay `sendChunk()`
+6. After dispatch completes → plugin sends `sendResponse()` (final)
+
+### chatId Encoding
+
+`chatId = "${agentId}::${sessionId}"` — encodes both IDs in OpenClaw's flat chat identifier. The `::` delimiter is validated (rejected in incoming IDs) to prevent injection.
+
+## Testing
+
+```bash
+npm test
+```
+
+**Test structure:**
+- `test/index.test.ts` — Full integration: registration, dispatch, audio, MIME, security
+- `test/relay.test.ts` — RelayConnection: lifecycle, reconnect, send, validation
+- `test/helpers.ts` — Mocks: MockWebSocket, MockRuntime, MockLogger, MockPluginContext
+
+**Mocking:** Vitest `vi.mock()` for fs and modules, custom mock classes for WebSocket and OpenClaw SDK
+
+## Versioning
+
+Follow **semver strictly**:
+- PATCH (0.0.x): backward-compatible bug fixes only
+- MINOR (0.x.0): new features or behavioral changes
+- MAJOR (x.0.0): breaking changes (e.g., requires new relay version)
+
+## Security Considerations
+
+1. **Audio files:** Path traversal prevention (`..`), symlink detection (`O_NOFOLLOW`), extension whitelist, size limits
+2. **Relay messages:** Field validation (max 256 char IDs, no `::` delimiter, required fields)
+3. **Token storage:** File permissions `0o600` (owner read/write only)
+4. **Log injection:** Control character stripping via `sanitizeForLog()`
+5. **Concurrency:** Max 10 concurrent dispatches to prevent resource exhaustion
+
+## Behavioral Guidelines
+
+1. **Always run `npm test` and `npx tsc --noEmit` before considering work done.**
+2. **Never weaken security measures** — audio validation, path traversal checks, and size limits are intentional.
+3. **Follow semver strictly** when bumping version. Don't spam patch versions.
+4. **Keep the codebase focused.** This plugin does one thing: bridge OpenClaw agents to the relay.
+5. **Verify before answering** — never make claims about system behavior without reading the code.
+6. **Publish with `npm publish`.**

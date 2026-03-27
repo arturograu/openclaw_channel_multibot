@@ -1,0 +1,45 @@
+{
+  "name": "openclaw-askred",
+  "version": "1.0.0",
+  "description": "OpenClaw channel plugin that bridges your agents with the AskRed mobile app",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/arturograu/openclaw-askred"
+  },
+  "keywords": [
+    "openclaw",
+    "openclaw-plugin",
+    "askred",
+    "channel"
+  ],
+  "files": [
+    "src",
+    "openclaw.plugin.json",
+    "README.md"
+  ],
+  "openclaw": {
+    "extensions": [
+      "src/index.ts"
+    ],
+    "channel": {
+      "id": "askred",
+      "label": "AskRed",
+      "selectionLabel": "AskRed App",
+      "docsPath": "/channels/askred",
+      "order": 50
+    }
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
+  },
+  "devDependencies": {
+    "@types/node": "^25.4.0",
+    "@vitest/coverage-v8": "^4.1.0",
+    "typescript": "^5.8.2",
+    "vitest": "^4.1.0"
+  }
+}
