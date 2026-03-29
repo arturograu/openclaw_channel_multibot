@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
-import { loadPersistedToken } from "./token-storage";
+import { loadPersistedCode, loadPersistedToken, persistCode } from "./token-storage";
 import type { AgentInfo, CliProgram } from "./types";
+
+const CODE_TTL_MS = 10 * 60_000; // 10 minutes
 
 interface CliOptions {
   relayUrl: string;
@@ -61,12 +63,14 @@ export function registerCliCommands(
             return;
           }
 
-          // This is the fresh pairing code
+          // This is the fresh pairing code — persist it to disk
           clearTimeout(timeout);
+          persistCode(tokenPath, msg.code, { warn: (m) => console.error(m) });
           console.log(`\n  New pairing code: ${msg.code}\n`);
           console.log(
             "Use this code in the AskRed app to reconnect your agents.",
           );
+          console.log("The code expires in 10 minutes.");
           ws.close();
         }
 
@@ -95,153 +99,43 @@ export function registerCliCommands(
   askred
     .command("status")
     .description(
-      "Check relay connection status and show the current pairing code",
+      "Show the current pairing code (reads from disk — no relay connection needed)",
     )
-    .action(async () => {
-      const token = loadPersistedToken(tokenPath, {
-        warn: (msg) => console.error(msg),
-      });
+    .action(() => {
+      const saved = loadPersistedCode(tokenPath);
 
-      if (!token) {
-        console.error("No relay token found. Start the gateway first.");
+      if (!saved) {
+        console.error(
+          "No pairing code found. Start the gateway first, then run:\n\n  openclaw askred new-pairing-code\n",
+        );
         process.exit(1);
       }
 
-      console.log("Connecting to relay...");
+      const ageMs = Date.now() - saved.codeAt;
+      if (ageMs > CODE_TTL_MS) {
+        console.log(
+          `\n  Pairing code expired (generated ${Math.round(ageMs / 60_000)} min ago).\n`,
+        );
+        console.log("  Run this to get a new one:\n");
+        console.log("    openclaw askred new-pairing-code\n");
+        return;
+      }
 
-      const ws = new WebSocket(`${relayUrl}/plugin`);
-
-      const timeout = setTimeout(() => {
-        console.error("Could not connect to relay.");
-        ws.close();
-        process.exit(1);
-      }, 15_000);
-
-      ws.onopen = () => {
-        ws.send(JSON.stringify({ type: "reconnect", token }));
-      };
-
-      ws.onmessage = (event) => {
-        let msg: Record<string, unknown>;
-        try {
-          msg = JSON.parse(event.data as string) as Record<string, unknown>;
-        } catch {
-          return;
-        }
-
-        if (msg.type === "code" && typeof msg.code === "string") {
-          clearTimeout(timeout);
-          console.log(`\n  Relay connected. Pairing code: ${msg.code}\n`);
-          ws.close();
-        }
-
-        if (msg.type === "error") {
-          clearTimeout(timeout);
-          console.error(`Relay error: ${msg.message as string}`);
-          ws.close();
-          process.exit(1);
-        }
-      };
-
-      ws.onerror = () => {
-        clearTimeout(timeout);
-        console.error("Could not connect to relay.");
-        process.exit(1);
-      };
-
-      await new Promise<void>((resolve) => {
-        ws.onclose = () => {
-          clearTimeout(timeout);
-          resolve();
-        };
-      });
+      const remainingMin = Math.max(
+        1,
+        Math.round((CODE_TTL_MS - ageMs) / 60_000),
+      );
+      console.log(`\n  Pairing code: ${saved.code}\n`);
+      console.log(`  Expires in ~${remainingMin} min.`);
+      console.log(
+        "  Use this code in the AskRed app to connect your agents.\n",
+      );
     });
 
   askred
     .command("list-agents")
-    .description("List agents registered with the relay")
-    .action(async () => {
-      const token = loadPersistedToken(tokenPath, {
-        warn: (msg) => console.error(msg),
-      });
-
-      if (!token) {
-        console.error("Start the gateway first to see registered agents.");
-        process.exit(1);
-      }
-
-      console.log("Connecting to relay...");
-
-      const ws = new WebSocket(`${relayUrl}/plugin`);
-      let receivedCode = false;
-
-      const timeout = setTimeout(() => {
-        console.error("Could not connect to relay.");
-        ws.close();
-        process.exit(1);
-      }, 15_000);
-
-      ws.onopen = () => {
-        ws.send(JSON.stringify({ type: "reconnect", token }));
-      };
-
-      ws.onmessage = (event) => {
-        let msg: Record<string, unknown>;
-        try {
-          msg = JSON.parse(event.data as string) as Record<string, unknown>;
-        } catch {
-          return;
-        }
-
-        // After reconnect the relay sends a "code" message — the plugin
-        // then registers its agents, which are included in the stored
-        // session. For the CLI we just need to trigger the reconnect
-        // and read the agents from the paired response or code message.
-        if (msg.type === "code") {
-          receivedCode = true;
-          // After reconnection, send a register with empty agents
-          // just to get back the stored agent list. Actually, the relay
-          // stores agents in persistence, so we need to request them.
-          // The simplest approach: register with a dummy empty array to
-          // trigger the stored agents to be sent back. But that would
-          // overwrite agents. Instead, just check if agents came in the
-          // message itself — they won't for "code" type.
-          // Better: read agents from the paired response on the app side.
-          // For the plugin CLI, we need to read from the config directly.
-        }
-
-        if (msg.type === "error") {
-          clearTimeout(timeout);
-          console.error(`Relay error: ${msg.message as string}`);
-          ws.close();
-          process.exit(1);
-        }
-      };
-
-      // Wait a bit for the connection to establish, then try reading
-      // agents from the local config file instead.
-      ws.onerror = () => {
-        clearTimeout(timeout);
-        console.error("Could not connect to relay.");
-        process.exit(1);
-      };
-
-      // Give the connection a moment then close and read from config.
-      await new Promise<void>((resolve) => {
-        const checkTimeout = setTimeout(() => {
-          clearTimeout(timeout);
-          ws.close();
-          resolve();
-        }, 3_000);
-
-        ws.onclose = () => {
-          clearTimeout(timeout);
-          clearTimeout(checkTimeout);
-          resolve();
-        };
-      });
-
-      // Try to read agents from config (the canonical source).
+    .description("List agents from the local OpenClaw config")
+    .action(() => {
       try {
         const configPath = `${process.env.HOME}/.openclaw/config.json`;
         const raw = readFileSync(configPath, "utf-8");
@@ -253,7 +147,6 @@ export function registerCliCommands(
         const agents = (askredConfig?.agents ?? []) as AgentInfo[];
 
         if (agents.length === 0) {
-          // Fallback to top-level agents list.
           const topAgents = config.agents as
             | Record<string, unknown>
             | undefined;
@@ -279,15 +172,10 @@ export function registerCliCommands(
         }
         console.log();
       } catch {
-        if (receivedCode) {
-          console.log(
-            "Connected to relay but could not read agent list from config.",
-          );
-          console.log("Agents are configured in ~/.openclaw/config.json");
-        } else {
-          console.error("Could not read agent configuration.");
-          process.exit(1);
-        }
+        console.error(
+          "Could not read agent configuration from ~/.openclaw/config.json",
+        );
+        process.exit(1);
       }
     });
 }

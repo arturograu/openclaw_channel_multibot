@@ -27,6 +27,8 @@ export interface RelayConnectionOptions {
   initialToken?: string;
   /** Called whenever the relay issues a new reconnect token — persist it. */
   onTokenChanged?: (token: string) => void;
+  /** Called whenever the relay issues a pairing code — persist it. */
+  onCodeReceived?: (code: string) => void;
 }
 
 export class RelayConnection {
@@ -44,6 +46,7 @@ export class RelayConnection {
   private readonly onInbound: InboundHandler;
   private readonly log: PluginLogger;
   private readonly onTokenChanged?: (token: string) => void;
+  private readonly onCodeReceived?: (code: string) => void;
   private activeDispatches = 0;
 
   constructor(opts: RelayConnectionOptions) {
@@ -58,6 +61,7 @@ export class RelayConnection {
     this.log = opts.log;
     this.reconnectToken = opts.initialToken ?? null;
     this.onTokenChanged = opts.onTokenChanged;
+    this.onCodeReceived = opts.onCodeReceived;
   }
 
   async start(): Promise<void> {
@@ -205,6 +209,7 @@ export class RelayConnection {
           return;
         }
         this.pairingCode = msg.code;
+        this.onCodeReceived?.(msg.code);
         if (msg.token && typeof msg.token === "string") {
           this.reconnectToken = msg.token;
           this.onTokenChanged?.(msg.token);

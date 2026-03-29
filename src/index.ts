@@ -4,6 +4,7 @@ import { dispatchToAgent } from "./dispatch";
 import { RelayConnection } from "./relay";
 import {
   loadPersistedToken,
+  persistCode,
   persistToken,
   resolveTokenPath,
 } from "./token-storage";
@@ -45,6 +46,7 @@ export default function register(api: PluginContext): void {
     log: api.logger,
     initialToken: savedToken,
     onTokenChanged: (token) => persistToken(tokenPath, token, api.logger),
+    onCodeReceived: (code) => persistCode(tokenPath, code, api.logger),
   });
 
   api.registerChannel({ plugin: createChannelPlugin(api, relay) });
