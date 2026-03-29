@@ -1,6 +1,6 @@
 {
   "name": "openclaw-askred",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "OpenClaw channel plugin that bridges your agents with the AskRed mobile app",
   "type": "module",
   "license": "MIT",
