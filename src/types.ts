@@ -134,8 +134,12 @@ export interface PluginRuntime {
       }): ResolvedRoute;
     };
     reply: {
-      finalizeInboundContext(ctx: Record<string, unknown>): Record<string, unknown>;
-      resolveEnvelopeFormatOptions(cfg: OpenClawConfig): Record<string, unknown>;
+      finalizeInboundContext(
+        ctx: Record<string, unknown>,
+      ): Record<string, unknown>;
+      resolveEnvelopeFormatOptions(
+        cfg: OpenClawConfig,
+      ): Record<string, unknown>;
       formatInboundEnvelope(params: Record<string, unknown>): string;
       dispatchReplyWithBufferedBlockDispatcher(params: {
         ctx: Record<string, unknown>;
@@ -192,7 +196,7 @@ export interface PluginContext {
 // ── Audio attachment ─────────────────────────────────────────────────────────
 
 export interface AudioAttachment {
-  data: string;    // base64 encoded
+  data: string; // base64 encoded
   mimeType: string;
 }
 

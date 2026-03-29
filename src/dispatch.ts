@@ -1,11 +1,11 @@
-import { extractAudioFromPayload } from "./audio.ts";
-import type { RelayConnection } from "./relay.ts";
+import { extractAudioFromPayload } from "./audio";
+import type { RelayConnection } from "./relay";
 import type {
   AudioAttachment,
   InboundContext,
   PluginLogger,
   PluginRuntime,
-} from "./types.ts";
+} from "./types";
 
 const CHANNEL_ID = "askred";
 const ACCOUNT_ID = "askred";
@@ -142,7 +142,11 @@ export async function dispatchToAgent(
         onError: (err) => {
           const detail = err instanceof Error ? err.message : String(err);
           logger.error(`[askred] reply error: ${detail}`);
-          relay.sendError(agentId, sessionId, "An error occurred while processing the response");
+          relay.sendError(
+            agentId,
+            sessionId,
+            "An error occurred while processing the response",
+          );
         },
       },
     });

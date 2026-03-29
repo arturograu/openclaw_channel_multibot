@@ -1,4 +1,4 @@
-import { cancelSession } from "./dispatch.ts";
+import { cancelSession } from "./dispatch";
 import type {
   AgentInfo,
   AudioAttachment,
@@ -6,8 +6,8 @@ import type {
   PluginLogger,
   RelayIncoming,
   RelayOutgoing,
-} from "./types.ts";
-import { sanitizeForLog } from "./validation.ts";
+} from "./types";
+import { sanitizeForLog } from "./validation";
 
 const INITIAL_RECONNECT_DELAY_MS = 5_000;
 const MAX_RECONNECT_DELAY_MS = 5 * 60_000; // 5 minutes
@@ -99,12 +99,34 @@ export class RelayConnection {
     return { ok: true, status: "connected" };
   }
 
-  sendChunk(agentId: string, sessionId: string, content: string, audio?: AudioAttachment): void {
-    this.send({ type: "chunk", agentId, sessionId, content, ...(audio && { audio }) });
+  sendChunk(
+    agentId: string,
+    sessionId: string,
+    content: string,
+    audio?: AudioAttachment,
+  ): void {
+    this.send({
+      type: "chunk",
+      agentId,
+      sessionId,
+      content,
+      ...(audio && { audio }),
+    });
   }
 
-  sendResponse(agentId: string, sessionId: string, content: string, audio?: AudioAttachment): void {
-    this.send({ type: "response", agentId, sessionId, content, ...(audio && { audio }) });
+  sendResponse(
+    agentId: string,
+    sessionId: string,
+    content: string,
+    audio?: AudioAttachment,
+  ): void {
+    this.send({
+      type: "response",
+      agentId,
+      sessionId,
+      content,
+      ...(audio && { audio }),
+    });
   }
 
   sendError(agentId: string, sessionId: string, message: string): void {
@@ -195,10 +217,14 @@ export class RelayConnection {
       if (msg.type === "cancel") {
         const { agentId, sessionId } = msg;
         if (
-          typeof agentId !== "string" || agentId.length === 0 ||
-          typeof sessionId !== "string" || sessionId.length === 0
+          typeof agentId !== "string" ||
+          agentId.length === 0 ||
+          typeof sessionId !== "string" ||
+          sessionId.length === 0
         ) {
-          this.log.warn("[askred] relay: cancel message missing required fields");
+          this.log.warn(
+            "[askred] relay: cancel message missing required fields",
+          );
           return;
         }
         cancelSession(sessionId, this, agentId, this.log);
@@ -209,21 +235,30 @@ export class RelayConnection {
         const { agentId, sessionId, content } = msg;
 
         if (
-          typeof agentId !== "string" || agentId.length === 0 ||
-          typeof sessionId !== "string" || sessionId.length === 0 ||
+          typeof agentId !== "string" ||
+          agentId.length === 0 ||
+          typeof sessionId !== "string" ||
+          sessionId.length === 0 ||
           typeof content !== "string"
         ) {
           this.log.warn("[askred] relay: message missing required fields");
           return;
         }
 
-        if (agentId.length > MAX_ID_LENGTH || sessionId.length > MAX_ID_LENGTH) {
-          this.log.warn("[askred] relay: agentId/sessionId exceeds length limit");
+        if (
+          agentId.length > MAX_ID_LENGTH ||
+          sessionId.length > MAX_ID_LENGTH
+        ) {
+          this.log.warn(
+            "[askred] relay: agentId/sessionId exceeds length limit",
+          );
           return;
         }
 
         if (agentId.includes("::") || sessionId.includes("::")) {
-          this.log.warn("[askred] relay: agentId/sessionId contains invalid delimiter");
+          this.log.warn(
+            "[askred] relay: agentId/sessionId contains invalid delimiter",
+          );
           return;
         }
 
@@ -249,8 +284,14 @@ export class RelayConnection {
         };
 
         if (this.activeDispatches >= MAX_CONCURRENT_DISPATCHES) {
-          this.log.warn("[askred] too many concurrent dispatches, dropping message");
-          this.sendError(agentId, sessionId, "Server is busy, please try again");
+          this.log.warn(
+            "[askred] too many concurrent dispatches, dropping message",
+          );
+          this.sendError(
+            agentId,
+            sessionId,
+            "Server is busy, please try again",
+          );
           return;
         }
 

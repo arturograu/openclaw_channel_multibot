@@ -1,18 +1,21 @@
-import { extractMediaReference } from "./audio.ts";
-import { registerCliCommands } from "./cli.ts";
-import { dispatchToAgent } from "./dispatch.ts";
-import { RelayConnection } from "./relay.ts";
-import { loadPersistedToken, persistToken, resolveTokenPath } from "./token-storage.ts";
+import { extractMediaReference } from "./audio";
+import { registerCliCommands } from "./cli";
+import { dispatchToAgent } from "./dispatch";
+import { RelayConnection } from "./relay";
+import {
+  loadPersistedToken,
+  persistToken,
+  resolveTokenPath,
+} from "./token-storage";
 import type {
   AgentInfo,
   ChannelPlugin,
   InboundContext,
-  OpenClawConfig,
   OutboundTextContext,
   PluginContext,
   SendResult,
-} from "./types.ts";
-import { sanitizeForLog } from "./validation.ts";
+} from "./types";
+import { sanitizeForLog } from "./validation";
 
 const CHANNEL_ID = "askred";
 const ACCOUNT_ID = "askred";
@@ -30,13 +33,15 @@ export default function register(api: PluginContext): void {
   const tokenPath = resolveTokenPath(api.runtime);
   const savedToken = loadPersistedToken(tokenPath, api.logger);
   if (savedToken) {
-    api.logger.info("[askred] loaded persisted relay token — will attempt reconnect");
+    api.logger.info(
+      "[askred] loaded persisted relay token — will attempt reconnect",
+    );
   }
 
   const relay = new RelayConnection({
     relayUrl,
     agents,
-    onInbound: (ctx) => handleInbound(api, relay, ctx),
+    onInbound: (ctx): Promise<void> => handleInbound(api, relay, ctx),
     log: api.logger,
     initialToken: savedToken,
     onTokenChanged: (token) => persistToken(tokenPath, token, api.logger),
@@ -85,7 +90,11 @@ async function handleInbound(
   } catch (err: unknown) {
     const detail = err instanceof Error ? err.message : String(err);
     api.logger.error(`[askred] dispatch error: ${detail}`);
-    relay.sendError(agentId, sessionId, "An error occurred while processing your message");
+    relay.sendError(
+      agentId,
+      sessionId,
+      "An error occurred while processing your message",
+    );
   }
 }
 
@@ -119,9 +128,14 @@ function createChannelPlugin(
           return { ok: false, error: "malformed chatId" };
         }
 
-        api.logger.debug(`[askred] sendText text=${sanitizeForLog(ctx.text.slice(0, 80))}`);
+        api.logger.debug(
+          `[askred] sendText text=${sanitizeForLog(ctx.text.slice(0, 80))}`,
+        );
 
-        const { cleanedText, audio } = extractMediaReference(ctx.text, api.logger);
+        const { cleanedText, audio } = extractMediaReference(
+          ctx.text,
+          api.logger,
+        );
         relay.sendResponse(agentId, sessionId, cleanedText, audio);
         return { ok: true };
       },

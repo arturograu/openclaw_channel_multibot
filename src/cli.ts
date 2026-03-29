@@ -1,5 +1,6 @@
-import { loadPersistedToken } from "./token-storage.ts";
-import type { AgentInfo, CliProgram } from "./types.ts";
+import { readFileSync } from "node:fs";
+import { loadPersistedToken } from "./token-storage";
+import type { AgentInfo, CliProgram } from "./types";
 
 interface CliOptions {
   relayUrl: string;
@@ -93,16 +94,16 @@ export function registerCliCommands(
 
   askred
     .command("status")
-    .description("Check relay connection status and show the current pairing code")
+    .description(
+      "Check relay connection status and show the current pairing code",
+    )
     .action(async () => {
       const token = loadPersistedToken(tokenPath, {
         warn: (msg) => console.error(msg),
       });
 
       if (!token) {
-        console.error(
-          "No relay token found. Start the gateway first.",
-        );
+        console.error("No relay token found. Start the gateway first.");
         process.exit(1);
       }
 
@@ -165,9 +166,7 @@ export function registerCliCommands(
       });
 
       if (!token) {
-        console.error(
-          "Start the gateway first to see registered agents.",
-        );
+        console.error("Start the gateway first to see registered agents.");
         process.exit(1);
       }
 
@@ -245,15 +244,19 @@ export function registerCliCommands(
       // Try to read agents from config (the canonical source).
       try {
         const configPath = `${process.env.HOME}/.openclaw/config.json`;
-        const raw = await Bun.file(configPath).text();
+        const raw = readFileSync(configPath, "utf-8");
         const config = JSON.parse(raw) as Record<string, unknown>;
         const channels = config.channels as Record<string, unknown> | undefined;
-        const askredConfig = channels?.askred as Record<string, unknown> | undefined;
+        const askredConfig = channels?.askred as
+          | Record<string, unknown>
+          | undefined;
         const agents = (askredConfig?.agents ?? []) as AgentInfo[];
 
         if (agents.length === 0) {
           // Fallback to top-level agents list.
-          const topAgents = config.agents as Record<string, unknown> | undefined;
+          const topAgents = config.agents as
+            | Record<string, unknown>
+            | undefined;
           const list = (topAgents?.list ?? []) as Array<{ id: string }>;
           if (list.length > 0) {
             console.log(`\n  Registered agents (${list.length}):\n`);
@@ -277,7 +280,9 @@ export function registerCliCommands(
         console.log();
       } catch {
         if (receivedCode) {
-          console.log("Connected to relay but could not read agent list from config.");
+          console.log(
+            "Connected to relay but could not read agent list from config.",
+          );
           console.log("Agents are configured in ~/.openclaw/config.json");
         } else {
           console.error("Could not read agent configuration.");

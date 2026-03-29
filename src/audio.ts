@@ -6,7 +6,7 @@ import {
   readFileSync,
 } from "node:fs";
 import { extname, resolve } from "node:path";
-import type { AudioAttachment, ReplyPayload } from "./types.ts";
+import type { AudioAttachment, ReplyPayload } from "./types";
 
 const MIME_TYPES: Record<string, string> = {
   ".mp3": "audio/mpeg",

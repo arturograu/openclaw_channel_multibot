@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { PluginRuntime } from "./types.ts";
+import type { PluginRuntime } from "./types";
 
 const TOKEN_FILE_NAME = "askred-relay-token.json";
 
